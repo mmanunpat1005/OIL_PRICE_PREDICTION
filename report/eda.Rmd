@@ -1,0 +1,193 @@
+---
+title: "Project II"
+author: "Manunpat"
+date: '2022-04-30'
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+## **Exploratory data analysis**
+
+```{r, echo = FALSE, message = FALSE, warning=FALSE}
+source(here::here("script/setup.R"))
+```
+
+### **Table 1 - Weekly OILWTI**  
+
+WTI is the underlying commodity of the New York Mercantile Exchange's (NYMEX) oil futures contract and is considered a high-quality oil that is easily refined. The data covers the period from the second week of 1986 to the ninth week of 2022 showing the changes of the price of WTI by weekly pattern.    
+<br>
+Data source from <https://fred.stlouisfed.org/series/DCOILWTICO#0>. 
+```{r echo=FALSE, message=FALSE, fig.align='center', fig.width=10}
+oilwti <- read_excel(here::here("data/DCOILWTICO.xls"))
+oilwti$observation_date <- yearweek(oilwti$observation_date)
+oilwti_tsibble <- as_tsibble(oilwti)
+oilwti_tsibble
+
+#check missing data
+has_gaps(oilwti_tsibble) #FALSE
+
+#plotting
+oilwti_tsibble %>% autoplot() + facet_grid(vars(),scales = "free_y")
+```
+<br>
+This data set does not have missing value. From the time series shown above, intuitively, the overall data has volatile upward trend. Both the peak and the extremely sharp decrease happened between 2008 and 2009. From the information provided by the website, we can know that there are the U.S.recessions during this period. Due to the Covid lock down, another decrease was around the beginning of 2020 however, it was not the case for the decline during the period of 2014 and 2016 because of the excessive supply from the US shale oil.  
+<br>
+Besides, so far we could not see clearly seasonality from this time series.  
+
+#### **Transformation and Decomposition**  
+Following, we would like to see the components of this time series which may help us declare its seasonality in further. From the graphs shown below, it indeed has increasing trend following economic cycle. Yet, in terms of seasonality, if we observe it in stages, it has different seasonality pattern at each short stage. 
+<br>
+
+```{r echo=FALSE, message=FALSE, fig.align='center', fig.width=10}
+dcmp <- oilwti_tsibble %>% model(STL(log(DCOILWTICO)))
+components(dcmp) %>% autoplot() + xlab("Year") +ylab("WTI")
+```
+
+### **Table 2 - Quarterly US GDP**
+
+-Seasonally Adjusted Annual
+
+By additional researching, we know that there are several factors influencing the price of WTI: 
+* Supply  
+* Demand  
+* New cycles  
+* Policy changes  
+* Politic  
+* Report  
+* Additionally, in recent years COVID-19 situation which have had serious impact on economy is also a new factor we should consider.  
+
+Reference source from: [investopedia](https://www.investopedia.com/articles/investing/072515/top-factors-reports-affect-price-oil.asp)   
+
+Data source from <https://fred.stlouisfed.org/series/GDP>. 
+<br>
+In this case, we cite the data of the U.S. GDP as following.
+```{r echo=FALSE, message=FALSE, fig.align='center', fig.width=10}
+gdp <- read_excel(here::here("data/GDP.xls"))
+
+gdp_quarterly <- gdp
+gdp_quarterly$observation_date <- yearquarter(gdp_quarterly$observation_date)
+gdp_quarterly <- as_tsibble(gdp_quarterly)
+gdp_quarterly
+
+#check missing data
+has_gaps(gdp_quarterly) #FALSE
+
+#plotting
+gdp_quarterly %>% autoplot() + facet_grid(vars(),scales = "free_y")
+```
+<br>
+From the graph above, we can see that the figure of GDP has increased till the begining of 2020, but decreased sharply after then when the COVID-19 pandemic started.  
+
+#### **Transformation Data and Decomposition**
+To see the pattern of the data clearly, we apply logarithm to the raw data in the transformation process.
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+gdp_quarterly$GDP <- log(gdp_quarterly$GDP)
+dcmp_gdp <- gdp_quarterly %>% model(STL(GDP))
+components(dcmp_gdp) %>% autoplot() + xlab("Year") +ylab("logGDP")
+```
+<br>
+Similarly, It has increasing tendency covering the whole time series. Yet, in the long run, there is seasonality in the time series, but it has different seasonality pattern at different stages. The effect of seasonality is very small.    
+
+### **Table 3 - Monthly US Consumer Price Index** 
+
+-Not seasonality adjusted
+
+As an important indicator to observe inflation, the data of the US consumer price index will be introduced in this part. Consumer Price Index reflects purchasing power of Americans. The data is scaled by setting 2015 is equal to 100 and it is monthly data.
+
+Data source from <https://fred.stlouisfed.org/series/USACPIALLMINMEI>. 
+```{r echo=FALSE, message=FALSE, fig.align='center', fig.width=10}
+cpi <- read_excel(here::here("data/USACPIALLMINMEI.xls"))
+
+cpi_monthly <- cpi
+cpi_monthly$observation_date <- yearmonth(cpi_monthly$observation_date)
+cpi_monthly <- as_tsibble(cpi_monthly)
+cpi_monthly
+
+#missing data
+has_gaps(cpi_monthly) #FALSE
+
+#plotting
+cpi_monthly %>% autoplot() + facet_grid(vars(),scales = "free_y")
+```
+  
+#### **Transformation Data and Decomposition**
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+cpi_monthly$USACPIALLMINMEI <- log(cpi_monthly$USACPIALLMINMEI)
+dcmp_cpi <- cpi_monthly %>% model(STL(USACPIALLMINMEI))
+components(dcmp_cpi) %>% autoplot() + xlab("Year") + ylab("logCPI")
+```
+
+It has a similar situation as GDP and has an upward trend throughout the observation period. Also, there is different seasonality patterns at different stages.    
+
+### **Data preparation**
+
+In this section, we transform the quarterly GDP and monthly CPI tables into weekly data in order to align with the OILWTI table (main table) for further study. By doing this, there are some missing values from both tables during the transformation. Regarding the decomposition of GDP, the linear trend is the main component of the time series after taking into account logarithm. Also, since GDP is a cumulative data (multiply with bigger numbers than CPI) by nature, the logarithm of GDP is suitable. For CPI, before 1980, an yearly increase of CPI was high, so the cumulative CPI was an exponential pattern. However, the increase was much smaller and quite stable after that so the pattern is linear. Although the nature of CPI is similar to GDP (multiply), we don't see the same pattern in the long run. Therefore, we don't use logarithm for CPI. 
+
+```{r echo=FALSE, message=FALSE}
+#GDP
+gdp_weekly <- gdp
+gdp_weekly$observation_date <- yearweek(gdp_weekly$observation_date)
+gdp_weekly$GDP <- log(gdp_weekly$GDP)
+gdp_weekly <- as_tsibble(gdp_weekly) 
+gdp_weekly
+
+##check missing data
+scan_gaps(gdp_weekly)
+
+##fill and interpolate gaps
+gdp_weekly <- gdp_weekly %>% fill_gaps() %>% 
+  mutate(logGDP = na.approx(GDP)) %>% 
+  select(observation_date, logGDP)
+has_gaps(gdp_weekly) #FALSE
+
+#CPI
+cpi_weekly <- cpi
+cpi_weekly$observation_date <- yearweek(cpi_weekly$observation_date)
+cpi_weekly$USACPIALLMINMEI <- log(cpi_weekly$USACPIALLMINMEI)
+cpi_weekly <- as_tsibble(cpi_weekly) 
+cpi_weekly
+
+##check missing data
+scan_gaps(cpi_weekly)
+
+##fill and interpolate gaps
+cpi_weekly <- cpi_weekly %>% fill_gaps() %>% 
+  mutate(logCPI = na.approx(USACPIALLMINMEI)) %>% 
+  select(observation_date, logCPI)
+has_gaps(cpi_weekly) #FALSE
+
+#combine 2 tables
+gdpcpi <- oilwti_tsibble %>% left_join(gdp_weekly) %>% left_join(cpi_weekly)
+gdpcpi <- gdpcpi[1:1878,]
+
+coeff <- 5
+
+ggplot(gdpcpi, aes(x=observation_date)) +
+  
+  geom_line( aes(y=approxGDP)) + 
+  geom_line( aes(y=approxCPI / coeff)) + 
+  scale_y_continuous(
+    name = "GDP",
+    sec.axis = sec_axis(~.*coeff, name="CPI"))
+
+cpi_weekly %>% autoplot() + facet_grid(vars(),scales = "free_y")
+gdp_weekly %>% autoplot() + facet_grid(vars(),scales = "free_y")
+
+p1 <- ggplot(gdpcpi, aes(x=observation_date, y=logGDP)) +
+  geom_line(color="#69b3a2", size=2) +
+  ggtitle("Weekly logGDP") +
+  theme_ipsum()
+  
+p2 <- ggplot(gdpcpi, aes(x=observation_date, y=logCPI)) +
+  geom_line(color="grey",size=2) +
+  ggtitle("Weekly logCPI") +
+  theme_ipsum()
+
+# Display both charts side by side thanks to the patchwork package
+p1 + p2
+
+```
+

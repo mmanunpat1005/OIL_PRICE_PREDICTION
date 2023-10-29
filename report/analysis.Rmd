@@ -1,0 +1,155 @@
+---
+title: "analysis"
+author: "Manunpat"
+date: '2022-04-30'
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+1. Model without regressors
+
+### 1. Check stationary
+The plot and the kpss test show that the time series is not stationary
+```{r}
+oilwti_tsibble %>% features(log(DCOILWTICO),unitroot_kpss) 
+#pvalue (0.01) is very low so we reject the null hypothesis that the time series is stationary
+```
+### 2. Find a proper diferencing for non-stationary
+The unitroot test shows that only one difference is proper to create stationary
+```{r, echo = FALSE, message = FALSE, warning=FALSE}
+oilwti_tsibble %>% features(log(DCOILWTICO),unitroot_ndiffs) #1
+oilwti_tsibble %>% features(difference(log(DCOILWTICO)),unitroot_kpss)
+#pvalue is 0.1 which is large enough to not reject the null hypothesis
+```
+### 3. Examine ACF and PACF to determine model
+It seems there are autocorrelation in lag 2-5 
+```{r, echo = FALSE, message = FALSE, warning=FALSE}
+gg_tsdisplay(oilwti_tsibble,difference(log(DCOILWTICO)), plot_type = "partial")
+```
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+#arima by hand: ignore seasonality because seasonality is very small
+fit <- model(oilwti_tsibble,
+              arima310 = (ARIMA(log(DCOILWTICO) ~ pdq(3,1,0))),
+              arima013 = (ARIMA(log(DCOILWTICO) ~ pdq(0,1,3))),
+              stepwise = (ARIMA(log(DCOILWTICO))),
+              search = ARIMA(log(DCOILWTICO), stepwise = FALSE))
+report(fit)
+#stepwise=search is the best model from AIC, AICc, BIC - ARIMA(2,1,3)(1,0,0)[52]
+#stepwise 0.00495   2333. -4652. -4652. -4613. <cpl [54]> <cpl [3]>
+fit
+
+#residual check: overall perfect
+fit %>% select(stepwise) %>% gg_tsresiduals()
+#no autocorrelation
+
+resi_fit <- fit %>% select(stepwise) %>% residuals(type = c("innovation"))
+qqPlot(resi_fit$.resid)
+#there are a few outliers due to the covid pandamic. Except those periods the residuals are almost normal distributed. 
+
+Box.test(resi_fit$.resid, type = "Ljung")
+#pvalue (0.9791) is high so our residual is independently distributed
+
+#forecast
+fit %>% forecast(h = 52) %>% autoplot(oilwti_tsibble, level = 0) + coord_cartesian(ylim = c(90, 120))
+#+ coord_cartesian(ylim = c(3, 5.5), xlim = c(18000,19500))
+```
+
+2. Model with regressors
+ARIMA + Regression
+AIC check fit in general because AIC exaimine fit model with null model
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+#2 variables
+fit_reg <- model(gdpcpi,
+                 mod_gdpcpi = ARIMA(log(DCOILWTICO) ~ logGDP + logCPI),
+                 mod_gdp    = ARIMA(log(DCOILWTICO) ~ logGDP),
+                 mod_cpi    = ARIMA(log(DCOILWTICO) ~ logCPI))
+
+
+report(fit_reg) 
+ts(fit_reg$mod_gdp)
+
+# model 1 is the best (lowest AIC, AICc, BIC).-> we choose model_gdpcpi for a scenario analysis
+#1 mod_gdpcpi 0.00463   2369. -4723. -4722. -4678. <cpl [54]> <cpl [1]>
+#2 mod_gdp    0.00488   2319. -4623. -4622. -4578. <cpl [54]> <cpl [2]>
+#3 mod_cpi    0.00468   2358. -4701. -4701. -4656. <cpl [54]> <cpl [2]>
+#AIC, AICc, BIC improves 1.4%-1.5% so we chose mod_gdpcpi
+
+fit_reg %>% select(mod_gdpcpi) %>% gg_tsresiduals()
+
+resi_fit <- fit_reg %>% select(mod_gdpcpi)  %>% residuals(type = c("innovation"))
+qqPlot(resi_fit$.resid)
+#there are a few outliers due to the covid pandamic. Except those periods the residuals are almost normal distributed. 
+
+Box.test(resi_fit$.resid, type = "Ljung")
+
+#residuals
+#bind_rows('Regrssion Error' = as_tibble(residuals(fit2, type = "regression")),
+#          'ARIMA ERROR' = as_tibble(residuals(fit2, type = "innovation")), 
+#          .id = "type") %>%
+#  ggplot(aes(x = observation_date, y = .resid)) + geom_line() + 
+#  facet_grid(vars(type), scales = "free_y") + labs(y="")
+```
+
+3. Scenario Analysis
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+
+fit_final <- fit_reg %>% select(mod_gdpcpi) 
+
+#scenario 1: normal situation (CPI +2%, US GDP +2.5%)
+# Historical US GDP before Covid is around 2.5%
+#https://data.worldbank.org/indicator/NY.GDP.MKTP.KD.ZG?locations=US
+# The inflation is in line with the target from the Federal Reserves at 2%
+future <- new_data(gdpcpi, 52) %>% mutate(logCPI = NA,logGDP = NA)
+future$logCPI[1] <- last(gdpcpi$logCPI)
+future$logCPI[52] <- last(gdpcpi$logCPI) + log(1.02)
+future$logGDP[1] <- last(gdpcpi$logGDP)
+future$logGDP[52] <- last(gdpcpi$logGDP) + log(1.025)
+future$logCPI <- na.approx(future$logCPI)
+future$logGDP <- na.approx(future$logGDP)
+
+forecast(fit_final, new_data = future) %>%
+  autoplot(oilwti_tsibble) + 
+  geom_line(aes(y = .fitted, color = "Fitted"), data = augment(fit_final))
+  labs(y = "Percentage change")  
+
+#scenario 2: Financial crisis (CPI + 0%, US GDP -3%) 
+# From the historical US GDP, GDP changes in 2008 and 2020 were -2.5% and -3.4%.
+# Assume that CPI is unchanged because CPI normally increases
+future_crisis <- new_data(gdpcpi, 52) %>% mutate(logCPI = NA,logGDP = NA)
+
+future_crisis$logCPI[1] <- last(gdpcpi$logCPI)
+future_crisis$logCPI[52] <- last(gdpcpi$logCPI) + log(1)
+future_crisis$logGDP[1] <- last(gdpcpi$logGDP)
+future_crisis$logGDP[52] <- last(gdpcpi$logGDP) + log(1-0.03)
+future_crisis$logCPI <- na.approx(future_crisis$logCPI)
+future_crisis$logGDP <- na.approx(future_crisis$logGDP)  
+
+forecast(fit_final, new_data = future_crisis) %>%
+  autoplot(oilwti_tsibble) + 
+  geom_line(aes(y = .fitted, color = "Fitted"), data = augment(fit_final))
+  labs(y = "Percentage change")
+
+  
+#scenario 3: Ukrain Russia conflict (CPI + 8%, limited impact on US GDP) 
+# If the war is contained within the region (Ukraine and Russia. i.e. no war escalation to the other regions), the impact on US economy is limited
+# Reference: https://www.bls.gov/cpi/
+future_war <- new_data(gdpcpi, 52) %>% mutate(logCPI = NA,logGDP = NA)
+
+future_war$logCPI[1] <- last(gdpcpi$logCPI)
+future_war$logCPI[52] <- last(gdpcpi$logCPI) + log(1.08)
+future_war$logGDP[1] <- last(gdpcpi$logGDP)
+future_war$logGDP[52] <- last(gdpcpi$logGDP) + log(1.025)
+future_war$logCPI <- na.approx(future_war$logCPI)
+future_war$logGDP <- na.approx(future_war$logGDP)
+
+forecast(fit_final, new_data = future_war) %>%
+  autoplot(oilwti_tsibble) + 
+  geom_line(aes(y = .fitted, color = "Fitted"), data = augment(fit_final))
+  labs(y = "Percentage change")
+
+```  
+
+
+

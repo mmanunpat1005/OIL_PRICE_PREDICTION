@@ -1,0 +1,362 @@
+---
+title: "WTI OIL"
+subtitle: "Forecasting"
+author: "Jiaming Huang, Manunpat Sirijaturaporn, Ting Yang"
+date: "2022/06/01"
+output:
+  xaringan::moon_reader:
+    css: [default, metropolis, metropolis-fonts]
+    lib_dir: libs
+    nature:
+      highlightStyle: arta
+      highlightLines: true
+      countIncrementalSlides: false
+      
+---
+
+
+```{r xaringan-logo, echo=FALSE}
+xaringanExtra::use_logo(
+image_url = "https://wp.unil.ch/bisa/files/2015/10/hec_logo_white.png",
+position = xaringanExtra::css_position(top = "0.5em", right = "1em"))
+```
+
+# Objective, Questions and Outline
+<br>
+<span style="font-size:24px;">__Objective__: Make a prediction of oil prices and perform scenario analysis  
+<br>
+<span style="font-size:24px;">__Questions__: <br>
+<span style="font-size:24px;"> 1. Find the best model for oil price prediction <br> 
+<span style="font-size:24px;"> 2. Predict oil prices in different economic scenarios <br>
+<br>
+<span style="font-size:24px;">__Outline__: <br>
+>-  <span style="font-size:20px;"> Overview of time series   
+   
+>- <span style="font-size:20px;"> Model without regressors   
+
+>- <span style="font-size:20px;"> Model with regressors   
+
+>- <span style="font-size:20px;"> Scenario analysis
+---
+```{r, include=FALSE}
+source(here::here("script/setup.R"))
+oilwti <- read_excel(here::here("data/DCOILWTICO.xls"))
+oilwti$observation_date <- yearweek(oilwti$observation_date)
+oilwti_tsibble <- as_tsibble(oilwti)
+gdp <- read_excel(here::here("data/GDP.xls"))
+
+gdp_quarterly <- gdp
+gdp_quarterly$observation_date <- yearquarter(gdp_quarterly$observation_date)
+gdp_quarterly <- as_tsibble(gdp_quarterly)
+gdp_quarterly$GDP <- log(gdp_quarterly$GDP)
+cpi <- read_excel(here::here("data/USACPIALLMINMEI.xls"))
+cpi_monthly <- cpi
+cpi_monthly$observation_date <- yearmonth(cpi_monthly$observation_date)
+cpi_monthly <- as_tsibble(cpi_monthly)
+cpi_monthly$USACPIALLMINMEI <- log(cpi_monthly$USACPIALLMINMEI)
+gdp_weekly <- gdp
+gdp_weekly$observation_date <- yearweek(gdp_weekly$observation_date)
+gdp_weekly$GDP <- log(gdp_weekly$GDP)
+gdp_weekly <- as_tsibble(gdp_weekly) 
+gdp_weekly <- gdp_weekly %>% fill_gaps() %>% 
+  mutate(logGDP = zoo::na.approx(GDP)) %>% 
+  select(observation_date, logGDP)
+has_gaps(gdp_weekly) #FALSE
+cpi_weekly <- cpi
+cpi_weekly$observation_date <- yearweek(cpi_weekly$observation_date)
+cpi_weekly$USACPIALLMINMEI <- log(cpi_weekly$USACPIALLMINMEI)
+cpi_weekly <- as_tsibble(cpi_weekly) 
+cpi_weekly <- cpi_weekly %>% fill_gaps() %>% 
+  mutate(logCPI = zoo::na.approx(USACPIALLMINMEI)) %>% 
+  select(observation_date, logCPI)
+has_gaps(cpi_weekly) #FALSE
+gdpcpi <- oilwti_tsibble %>% left_join(gdp_weekly) %>% left_join(cpi_weekly)
+gdpcpi <- gdpcpi[1:1878,]
+```
+
+```{r setup, include=FALSE}
+options(
+  htmltools.dir.version  = FALSE,
+  htmltools.preserve.raw = FALSE # needed for windows
+)
+```
+
+# Overview of time series
+
+__Several key nodes of the shocks: __  
+- Gulf war at Iraq and Kuwait in 1990s
+- The economic bubbles and financial crisis in 2000s (~2008)
+- The excessive oil supply in 2014
+- Covid pandemic in 2020
+- Currently, the price recovery due to the lockdown lift and the Ukraine-Russia war
+
+```{r echo=FALSE, message=FALSE, fig.align='center', fig.height=4, fig.width=11}
+#ts plotting
+
+p1 <- oilwti_tsibble %>% autoplot()+
+  labs(y = "WTI Oil price ($)", title = "Weekly time series of WTI price")
+
+plotly::ggplotly(p1)
+```
+
+data updated: 2022-05-14
+---
+# STL Component
+
+<br>
+```{r echo=FALSE, message=FALSE, fig.align='center', fig.width=11, fig.height=5}
+dcmp <- oilwti_tsibble %>% model(STL(log(DCOILWTICO)))
+components(dcmp) %>% autoplot() + xlab("Year") +ylab("logWTI") 
+```
+
+- Trend: It looked stable before 1999 then there had been an upward trend until 2009. After 2009, it is stable again
+- Seasonality: There is a yearly seasonality but it has a small impact on this time series
+- Remainder: Normally it is volatile around the range of 0.5 to -0.5 but we see the sharp drop in 2020 
+---
+
+# Building Model | without regressors
+<br>
+.pull-left[
+```{r, echo=FALSE, message=FALSE, warning=FALSE, out.height=0.7}
+
+# - Kpss test shows that the ts is not stationary  
+# - Unit root test shows that only one difference is proper 
+# - In ACF and PACF plot, there are autocorrelation in the first 2 or 3 lags   
+fit <- model(oilwti_tsibble,
+              arima310 = (ARIMA(log(DCOILWTICO) ~ pdq(3,1,0))),
+              arima013 = (ARIMA(log(DCOILWTICO) ~ pdq(0,1,3))),
+              stepwise = (ARIMA(log(DCOILWTICO))),
+              search = ARIMA(log(DCOILWTICO), stepwise = FALSE))
+# fit
+# 
+# fit_desc <- fit %>% pivot_longer(cols = everything(),
+#                names_to = "model_type",
+#                values_to = "model_specifics_mdl") %>%
+#   mutate(model_specifics = format(model_specifics_mdl)) %>%
+#   select(-model_specifics_mdl)
+```
+
+```{r, include=FALSE}
+fit_desc <- fit %>% 
+  as_tibble() %>%
+  gather() %>%
+  mutate(model_desc = print(value)) %>%
+  select(key, model_desc) %>%
+  set_names("model", "model_desc") 
+```
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE, fig.width=5}
+library(kableExtra)
+fit_desc%>%
+  knitr::kable( "html") %>%
+  kable_styling(bootstrap_options = "striped", font_size =12)%>%
+  column_spec(1, bold = T, border_right = T, border_left = T, width = "15em") %>%
+  column_spec(2, width = "15em")
+```
+ ]
+ .pull-right[
+> <span style="color:#03457C ;">Select 1 differencing in ARIMA model and try serveral possibilities.
+</span>
+
+]
+<br>
+- <span style="color:#03457C ;">Here, we can observe auto ARIMA models (stepwise and search) have smaller AICc</span>
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE, out.height= 0.8}
+library(DT)
+glance.fit <- glance(fit) %>% arrange(AICc) %>% select(.model:BIC)
+
+ DT::datatable(glance.fit, options = list(searching = F, pageLength = 2, height=4),
+               caption = "Accuracy of Models") %>%  
+  formatRound('sigma2', 2) %>%
+  formatRound('AIC', 2)%>%
+  formatRound('AICc', 2)%>%
+  formatRound('BIC', 2) %>%
+  formatRound('log_lik', 2)%>%
+  formatStyle(columns = c(1, 2, 3, 4, 5, 6, 7), fontSize = '90%')
+```
+
+---
+# Building Model | without regressors
+> Selected model: auto ARIMA model</span>     
+
+.pull-left[
+```{r, echo=FALSE, message=FALSE, warning=FALSE,fig.height=7}
+ fit %>% select(stepwise) %>% gg_tsresiduals()
+
+```
+]
+.pull-right[
+```{r, echo=FALSE, message=FALSE, warning=FALSE, fig.height=6}
+library(car)
+resi_fit <- fit %>% select(stepwise) %>% residuals(type = c("innovation"))
+qqPlot(resi_fit$.resid)
+
+```
+]
+- <span style="color:#03457C ;"> Overall, the residual examination returns good performance. There is no autocorrelation and it is fat-tailed distribution with two large outliers from covid pandemic.
+---
+
+# Building Model | without regressors
+
+> Forecasting  
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE,fig.width=11, fig.height=5}
+ fit %>% forecast(h = 52) %>% autoplot(oilwti_tsibble, level = 0) +
+  labs(y = "log WTI", title = "Forecast of model without regressors")
+```
+
+- <span style="color:#03457C ;">Every model returns similar results 
+- <span style="color:#03457C ;">The price will increase next year.
+
+---
+
+# Building Model | with regressors
+<br>
+> Auto ARIMA  + regressors 
+
+<br>
+```{r, message=FALSE, warning=FALSE}
+fit_reg <- model(gdpcpi,
+                 mod_gdpcpi = ARIMA(log(DCOILWTICO) ~ logGDP + logCPI),
+                 mod_gdp    = ARIMA(log(DCOILWTICO) ~ logGDP),
+                 mod_cpi    = ARIMA(log(DCOILWTICO) ~ logCPI))
+```
+
+```{r, include=FALSE}
+fit_reg_desc <- fit_reg %>% 
+  as_tibble() %>%
+  gather() %>%
+  mutate(model_desc = print(value)) %>%
+  select(key, model_desc) %>%
+  set_names("model", "model_desc") 
+```
+
+<br>
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+fit_reg_desc%>%
+  knitr::kable( "html", caption ="Models description") %>%
+   kableExtra::kable_styling(bootstrap_options = "striped", font_size = 15)%>%
+  column_spec(1, bold = T, border_right = T, border_left = T, width = "30em") %>%
+  column_spec(2, width = "80em")
+```
+
+
+---
+# Building Model | with regressors
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE, out.height=0.8}
+glance.fit_reg <- glance(fit_reg) %>% arrange(AICc) %>% select(.model:BIC)
+ DT::datatable(glance.fit_reg, options = list(searching = F, pageLength = 3, height= 3),
+               caption = "Accuracy of models with regressors") %>%  
+  formatRound('sigma2', 2) %>%
+  formatRound('AIC', 2)%>%
+  formatRound('AICc', 2)%>%
+  formatRound('BIC', 2) %>%
+  formatRound('log_lik', 2)%>%
+  formatStyle(columns = c(1, 2, 3, 4, 5, 6, 7), fontSize = '80%')
+```
+
+<br>
+     
+.pull-left[
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+loggdp <- c(fit_reg[[1]][[1]][["fit"]][["model"]][["coef"]][["logGDP"]], fit_reg[[1]][[1]][["fit"]][["par"]][["std.error"]][["logGDP"]])
+
+logcpi <- c(fit_reg[[1]][[1]][["fit"]][["model"]][["coef"]][["logCPI"]],
+                fit_reg[[1]][[1]][["fit"]][["par"]][["std.error"]][["logCPI"]])
+
+mod_gdpcpi <- c("coef", "s.e")
+mod_gdpcpi.coef <- data.frame(mod_gdpcpi, loggdp,logcpi)
+
+mod_gdpcpi.coef %>% knitr::kable( "html", caption ="Model with two regressors", 
+                                  font_size = 10, digits = 2) %>%
+  column_spec(1, bold = T, border_right = T, border_left = T, width = "10em") %>%
+  column_spec(2, width = "10em")
+
+```
+]
+
+.pull-right[
+- <span style="color:#03457C ;">Residuals are similar to the auto ARIMA model   
+- <span style="color:#03457C ;">GDP and CPI are positive correlated with oil price     
+- <span style="color:#03457C ;">Auto ARIMA plus two regressors is the best model     
+]
+
+---
+# Scenario Analysis
+> Scenario 1: forecasting with normal situation (CPI+2%, US GDP +2.5%)
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE,fig.width=11, fig.height=5}
+fit_final <- fit_reg %>% select(mod_gdpcpi) 
+future <- new_data(gdpcpi, 52) %>% mutate(logCPI = NA,logGDP = NA)
+future$logCPI[1] <- last(gdpcpi$logCPI)
+future$logCPI[52] <- last(gdpcpi$logCPI) + log(1.02)
+future$logGDP[1] <- last(gdpcpi$logGDP)
+future$logGDP[52] <- last(gdpcpi$logGDP) + log(1.025)
+future$logCPI <- na.approx(future$logCPI)
+future$logGDP <- na.approx(future$logGDP)
+forecast(fit_final, new_data = future) %>%
+  autoplot(oilwti_tsibble) + 
+  geom_line(aes(y = .fitted, color = "Fitted"), data = augment(fit_final))+
+  labs(y = "WTI Oil price ($)", title = "Scenario forecasting with normal situation")
+```
+
+- <span style="color:#03457C ;">GDP: Historical US GDP before Covid is around 2.5%
+- <span style="color:#03457C ;">CPI: The inflation is in line with the target from the Federal Reserves at 2%
+<br>
+[Data from the world bank](https://data.worldbank.org/indicator/NY.GDP.MKTP.KD.ZG?locations=US)
+
+
+---
+# Scenario Analysis
+> Scenario 2: forecasting with financial crisis (CPI+0%, US GDP-3%)
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE,fig.width=11, fig.height=5}
+future_crisis <- new_data(gdpcpi, 52) %>% mutate(logCPI = NA,logGDP = NA)
+future_crisis$logCPI[1] <- last(gdpcpi$logCPI)
+future_crisis$logCPI[52] <- last(gdpcpi$logCPI) + log(1)
+future_crisis$logGDP[1] <- last(gdpcpi$logGDP)
+future_crisis$logGDP[52] <- last(gdpcpi$logGDP) + log(1-0.03)
+future_crisis$logCPI <- na.approx(future_crisis$logCPI)
+future_crisis$logGDP <- na.approx(future_crisis$logGDP)  
+forecast(fit_final, new_data = future_crisis) %>%
+  autoplot(oilwti_tsibble) + 
+  geom_line(aes(y = .fitted, color = "Fitted"), data = augment(fit_final)) +
+  labs(y = "WTI Oil price ($)", title = "Scenario forecasting with financial crisis")
+```
+
+- <span style="color:#03457C ;"> GDP: Historical US GDP changes in 2008 and 2020 were -2.5% and -3.4%, respectively   
+- <span style="color:#03457C ;"> CPI: Assuming inflation stalls (CPI is unchanged) 
+---
+# Scenario Analysis
+> Scenario 3: forecasting with Ukarin Russia conflict (CPI+8%, limited impact on US GDP)
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE,fig.width=11, fig.height=5}
+future_war <- new_data(gdpcpi, 52) %>% mutate(logCPI = NA,logGDP = NA)
+future_war$logCPI[1] <- last(gdpcpi$logCPI)
+future_war$logCPI[52] <- last(gdpcpi$logCPI) + log(1.08)
+future_war$logGDP[1] <- last(gdpcpi$logGDP)
+future_war$logGDP[52] <- last(gdpcpi$logGDP) + log(1.025)
+future_war$logCPI <- na.approx(future_war$logCPI)
+future_war$logGDP <- na.approx(future_war$logGDP)
+forecast(fit_final, new_data = future_war) %>%
+  autoplot(oilwti_tsibble) + 
+  geom_line(aes(y = .fitted, color = "Fitted"), data = augment(fit_final)) +
+  labs(y = "WTI Oil price ($)", title = "Scenario forecasting with Ukarin Russia conflict")
+```
+
+- <span style="color:#03457C ;"> GDP: War between Ukarin and Russia has limited impact on the US economy   
+- <span style="color:#03457C ;"> CPI: [Data from United States Department of Labor](https://www.bls.gov/cpi/)
+
+---
+
+# Q & A 
+
+<br>
+<br>
+<br>
+<br>
+<br>
+<span style="font-size:40px;">__Thank you for your attention!__
+
